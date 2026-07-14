@@ -1,7 +1,7 @@
 
-  # Redesign Pulse Project Website
+  # Pulse Project at UCI
 
-  This is a code bundle for Redesign Pulse Project Website. The original project is available at https://www.figma.com/design/cw5zd2n2soEzivo1EduEA1/Redesign-Pulse-Project-Website.
+  This is a code bundle for Pulse Project at UCI. The original project is available at https://www.figma.com/design/cw5zd2n2soEzivo1EduEA1/Pulse-Project-at-UCI.
 
   ## Running the code
 
