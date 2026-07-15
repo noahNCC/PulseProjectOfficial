@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pulse Project — Pump Assembly</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+  :root{
+    --bg:#0A0E13;
+    --line:#1F2A36;
+    --line-bright:#33475C;
+    --steel:#8B98A6;
+    --steel-dim:#5B6673;
+    --white:#EDF1F5;
+    --red:#FF3B2F;
+    --blue:#4FA8FF;
+    --grid: rgba(79,168,255,0.06);
+    --font-display: 'Space Grotesk', sans-serif;
+    --font-body: 'Inter', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    background:var(--bg);
+    color:var(--white);
+    font-family:var(--font-body);
+    overflow-x:hidden;
+  }
+
+  .grid-bg{
+    position:fixed; inset:0;
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size: 48px 48px;
+    pointer-events:none;
+    z-index:0;
+    opacity:0.6;
+  }
+
+  .section-label{
+    font-family:var(--font-mono);
+    font-size:12px;
+    color:var(--blue);
+    text-transform:uppercase;
+    letter-spacing:0.12em;
+    display:flex; align-items:center; gap:10px;
+    margin-bottom:20px;
+  }
+  .section-label::before{content:'';width:24px;height:1px;background:var(--blue);}
+
+  /* ---------- EXPLODED SEQUENCE ---------- */
+  .exploded-wrap{
+    position:relative;
+    height:600vh;
+    z-index:1;
+  }
+  .exploded-sticky{
+    position:sticky;
+    top:0;
+    height:100vh;
+    overflow:hidden;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+  }
+  .exploded-header{
+    position:absolute;
+    top:56px; left:40px;
+    z-index:5;
+  }
+  .exploded-header h2{
+    font-family:var(--font-display);
+    font-size:clamp(28px,4vw,44px);
+    font-weight:600;
+    max-width:480px;
+  }
+  .exploded-header p{
+    color:var(--steel);
+    font-size:14px;
+    max-width:420px;
+    margin-top:14px;
+    line-height:1.6;
+  }
+  .exploded-progress{
+    position:absolute;
+    top:56px; right:40px;
+    font-family:var(--font-mono);
+    font-size:12px;
+    color:var(--steel-dim);
+    text-align:right;
+    z-index:5;
+  }
+  .exploded-progress .pn{
+    font-size:22px;
+    color:var(--white);
+    font-family:var(--font-display);
+    display:block;
+    margin-top:4px;
+    transition:opacity 0.2s;
+    max-width:220px;
+  }
+  .assembly-stage{
+    position:absolute;
+    inset:0;
+  }
+  #rotor-canvas{
+    position:absolute; inset:0;
+    width:100%; height:100%;
+    display:block;
+  }
+  .part-label{
+    position:absolute;
+    top:0; left:0;
+    font-family:var(--font-mono);
+    font-size:11px;
+    color:var(--steel);
+    opacity:0;
+    transition:opacity 0.35s;
+    white-space:nowrap;
+    display:flex;
+    align-items:center;
+    gap:8px;
+    pointer-events:none;
+    will-change:transform, opacity;
+    z-index:4;
+  }
+  .part-label .dot{
+    width:5px; height:5px; border-radius:50%;
+    background:var(--red);
+    flex-shrink:0;
+  }
+  .part-label .pnum{color:var(--blue);}
+  .part-label.active{opacity:1;}
+
+  @media (max-width:860px){
+    .exploded-header{max-width:70vw;}
+    .exploded-progress .pn{font-size:24px;}
+  }
+
+  @media (prefers-reduced-motion: reduce){
+    *{animation-duration:0.01ms !important; animation-iteration-count:1 !important; transition-duration:0.01ms !important;}
+  }
+</style>
+</head>
+<body>
+
+<div class="grid-bg"></div>
+
+<!-- ================= EXPLODED ASSEMBLY (this is the whole thing) ================= -->
+<section class="exploded-wrap" id="assembly">
+  <div class="exploded-sticky">
+    <div class="exploded-header">
+      <div class="section-label">Assembly</div>
+      <h2>One housing. Two independent pump channels.</h2>
+      <p>Scroll to isolate a single rotor–stator stage, then pull back to a cross-section view showing both drive motors.</p>
+    </div>
+    <div class="exploded-progress">
+      View<span class="pn" id="pn-display">Overview</span>
+    </div>
+
+    <div class="assembly-stage">
+      <canvas id="rotor-canvas"></canvas>
+      <div id="label-layer"></div>
+    </div>
+  </div>
+</section>
+
+<script>
+(function(){
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const wrap = document.querySelector('.exploded-wrap');
+  const stage = document.querySelector('.assembly-stage');
+  const canvas = document.getElementById('rotor-canvas');
+  const labelLayer = document.getElementById('label-layer');
+  const pnDisplay = document.getElementById('pn-display');
+
+  // ---------- THREE SETUP ----------
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(40, 1, 1, 3000);
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+
+  function resize(){
+    const w = stage.clientWidth, h = stage.clientHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h, false);
+  }
+
+  // ---------- LIGHTING ----------
+  scene.add(new THREE.AmbientLight(0x3a4a5c, 1.0));
+  const keyLight = new THREE.DirectionalLight(0xe8ecf1, 1.2);
+  keyLight.position.set(200, 300, 400);
+  scene.add(keyLight);
+  const fillLight = new THREE.DirectionalLight(0xaebfd4, 0.55);
+  fillLight.position.set(-250, -80, 180);
+  scene.add(fillLight);
+  const rimLight = new THREE.DirectionalLight(0x4fa8ff, 0.9);
+  rimLight.position.set(-300, 100, -200);
+  scene.add(rimLight);
+  const redLight = new THREE.PointLight(0xff3b2f, 0.6, 700, 2);
+  redLight.position.set(-160, 90, 60);
+  scene.add(redLight);
+  const motorLight = new THREE.PointLight(0x4fa8ff, 0, 260, 2); // ramps up at x-ray state, sits at the motor bridge
+  motorLight.position.set(0, -124, 0);
+  scene.add(motorLight);
+
+  // ---------- MATERIALS ----------
+  const hubMat    = new THREE.MeshPhysicalMaterial({ color:0xb7c1cc, metalness:0.92, roughness:0.16, clearcoat:0.6, clearcoatRoughness:0.2 });
+  const bladeMat  = new THREE.MeshPhysicalMaterial({ color:0x8a97a6, metalness:0.88, roughness:0.22, clearcoat:0.5, side:THREE.DoubleSide, emissive:0x0d1720, emissiveIntensity:0.22 });
+  const statorMat = new THREE.MeshPhysicalMaterial({ color:0x4fa8ff, metalness:0.65, roughness:0.25, clearcoat:0.5, emissive:0x0a2436, emissiveIntensity:0.32, side:THREE.DoubleSide });
+  const impellerMat = new THREE.MeshStandardMaterial({ color:0x5b7fd6, metalness:0.12, roughness:0.5, side:THREE.DoubleSide }); // matte Ansys blue, reads bright like the reference
+  const shroudMat = new THREE.MeshBasicMaterial({ color:0x8fe64f, wireframe:true, transparent:true, opacity:0.14 });
+  const housingMat= new THREE.MeshStandardMaterial({ color:0x2c3846, metalness:0.3, roughness:0.6, transparent:true, opacity:1, side:THREE.DoubleSide });
+  const motorMat  = new THREE.MeshStandardMaterial({ color:0x1b2531, metalness:0.4, roughness:0.5, emissive:0x4fa8ff, emissiveIntensity:0 });
+  const shaftMat  = new THREE.MeshPhysicalMaterial({ color:0x9aa7b5, metalness:0.92, roughness:0.14, clearcoat:0.6 });
+
+  // ---------- END FIN GEOMETRY — flat rectangular paddle fins with ball cap, matching the reference tips ----------
+  function buildPropBlade(hubR, length, chord, pitchDeg){
+    const s = new THREE.Shape();
+    s.moveTo(hubR, -chord*0.5);
+    s.lineTo(hubR+length, -chord*0.5);
+    s.lineTo(hubR+length, chord*0.5);
+    s.lineTo(hubR, chord*0.5);
+    s.closePath();
+    const geo = new THREE.ExtrudeGeometry(s, { depth:2.2, bevelEnabled:true, bevelThickness:0.5, bevelSize:0.5, bevelSegments:2 });
+    geo.translate(0,0,-1.1);
+    geo.rotateY(THREE.MathUtils.degToRad(pitchDeg));
+    return geo;
+  }
+  function buildProp(hubR, length, chord, pitchDeg, count, mat, phase){
+    const group = new THREE.Group();
+    const bladeGeo = buildPropBlade(hubR, length, chord, pitchDeg);
+    for(let i=0;i<count;i++){
+      const blade = new THREE.Mesh(bladeGeo, mat);
+      blade.rotation.z = phase + i*(Math.PI*2/count);
+      group.add(blade);
+    }
+    const cap = new THREE.Mesh(new THREE.SphereGeometry(Math.max(3.4, hubR*1.15), 16, 12), mat);
+    group.add(cap);
+    return group;
+  }
+
+  // ---------- BUILD ONE PUMP CHANNEL (impeller hub: inlet stator -> rotor -> outlet stator) ----------
+  const TUBE_HALF = 100;
+
+  function colorForZ(z){
+    const edge0 = -46, edge1 = -6;
+    let mix;
+    if(z<=edge0) mix = 0;
+    else if(z>=edge1) mix = 1;
+    else { const x = (z-edge0)/(edge1-edge0); mix = x*x*(3-2*x); }
+    return {
+      r: 0.31 + (1.0 -0.31)*mix,
+      g: 0.66 + (0.23-0.66)*mix,
+      b: 1.0  + (0.18-1.0 )*mix
+    };
+  }
+
+  // ---------- IMPELLER BLADE BAND — short, wide helical drum around the hub's midsection (the contour-banded ring in the Fluent render) ----------
+  function buildBandBlade(hubR, tipR, length, turns, segments, phase){
+    const positions = [];
+    const indices = [];
+    for(let i=0;i<=segments;i++){
+      const t = i/segments;
+      const z = -length/2 + t*length;
+      const angle = phase + t*turns*Math.PI*2;
+      const cosA = Math.cos(angle), sinA = Math.sin(angle);
+      positions.push(hubR*cosA, hubR*sinA, z);
+      positions.push(tipR*cosA, tipR*sinA, z);  // full radius end-to-end: a wide drum band, not a tapered ribbon
+    }
+    for(let i=0;i<segments;i++){
+      const a = i*2, b = i*2+1, c = i*2+2, d = i*2+3;
+      indices.push(a,b,c, b,d,c);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geo.setIndex(indices);
+    geo.computeVertexNormals();
+    return geo;
+  }
+  // ---------- CFD CONTOUR TEXTURE — the green-yellow banded surface with red blade-tip streaks from the Fluent render ----------
+  function makeContourTexture(){
+    const c = document.createElement('canvas');
+    c.width = 512; c.height = 256;
+    const ctx = c.getContext('2d');
+    const g = ctx.createLinearGradient(0,0,0,256);
+    g.addColorStop(0,'#a4d64f');
+    g.addColorStop(0.45,'#7cc93f');
+    g.addColorStop(1,'#b9e35b');
+    ctx.fillStyle = g; ctx.fillRect(0,0,512,256);
+    // wavy contour isolines
+    ctx.strokeStyle = 'rgba(24,84,26,0.5)';
+    ctx.lineWidth = 1;
+    for(let i=0;i<26;i++){
+      ctx.beginPath();
+      const y0 = (i/26)*256;
+      for(let x=0;x<=512;x+=8){
+        const y = y0 + Math.sin((x/512)*Math.PI*6 + i*0.7)*6 + Math.sin(x*0.05+i)*2;
+        if(x===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+      }
+      ctx.stroke();
+    }
+    // warm yellow high-pressure bands
+    ctx.strokeStyle='rgba(232,220,70,0.45)'; ctx.lineWidth=5;
+    [70,185].forEach(y0=>{ ctx.beginPath(); for(let x=0;x<=512;x+=8){const y=y0+Math.sin(x*0.03)*8; x===0?ctx.moveTo(x,y):ctx.lineTo(x,y);} ctx.stroke();});
+    // red blade-tip streaks: two per revolution, slightly slanted like the reference
+    ctx.strokeStyle = '#e03418';
+    ctx.lineWidth = 4;
+    ctx.shadowColor = '#ff5030'; ctx.shadowBlur = 6;
+    for(let k=0;k<2;k++){
+      ctx.beginPath();
+      const x0 = 64 + k*256;
+      ctx.moveTo(x0, 0);
+      ctx.lineTo(x0 + 90, 256);
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.wrapT = THREE.ClampToEdgeWrapping;
+    return tex;
+  }
+
+  // ---------- ROTOR — contour-banded cylinder shell (the drum from the reference) with helical blades inside ----------
+  function buildRotor(hubR, tipR, length, turns, mat){
+    const group = new THREE.Group();
+    const bandMat = new THREE.MeshBasicMaterial({ map: makeContourTexture(), side:THREE.DoubleSide, transparent:true, opacity:0.96 });
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(tipR, tipR, length, 48, 1, true), bandMat);
+    band.rotation.x = Math.PI/2;
+    group.add(band);
+    group.add(new THREE.Mesh(buildBandBlade(hubR, tipR-0.6, length-2, turns, 40, 0), mat));
+    group.add(new THREE.Mesh(buildBandBlade(hubR, tipR-0.6, length-2, turns, 40, Math.PI), mat));
+    return group;
+  }
+
+  // ---------- HUB PROFILE — thin shaft through the band region, bulging downstream, long smooth taper to a point (reference silhouette) ----------
+  function buildHubGeometry(){
+    // control points [heightAlongLatheAxis, radius]; lathe +y maps to local -z (inlet end)
+    const prof = [
+      [ 62, 1.1],[ 56, 2.6],[ 50, 3.4],[ 40, 4.0],[ 28, 4.4],[ 16, 4.8],[  6, 5.4],
+      [  0, 7.2],[ -6,11.2],[-12,13.6],[-18,13.4],[-26,11.4],[-34, 8.4],[-42, 5.4],
+      [-50, 3.2],[-58, 1.6],[-62, 1.0]
+    ];
+    const pts = prof.map(([y,r]) => new THREE.Vector2(r, y));
+    return new THREE.LatheGeometry(pts, 32);
+  }
+
+  function buildChannel(){
+    const channel = new THREE.Group();
+
+    // impeller hub — single smooth body: thin inlet shaft, downstream bulge, taper to a point
+    const hub = new THREE.Mesh(buildHubGeometry(), impellerMat);
+    hub.rotation.x = -Math.PI/2; // lathe axis (y) -> channel axis (z)
+    channel.add(hub);
+
+    // INLET stator — flat 4-blade paddle fins + ball cap on the thin shaft end
+    const statorIn = buildProp(2.5, 13, 7, 14, 4, impellerMat, 0);
+    statorIn.position.z = -56;
+    channel.add(statorIn);
+
+    // ROTOR — contour-banded drum over the inlet shaft section, spins with the shaft
+    const rotor = buildRotor(5, 22, 40, 0.5, impellerMat);
+    rotor.position.z = -26;
+    channel.add(rotor);
+
+    // OUTLET stator — flat 4-blade paddle fins + ball cap at the tapered tip
+    const statorOut = buildProp(2.5, 13, 7, 14, 4, impellerMat, Math.PI/4);
+    statorOut.position.z = 56;
+    channel.add(statorOut);
+
+    // white annotation circles around each fin cluster, like the reference's rotation-plane rings
+    const ringMat = new THREE.MeshBasicMaterial({ color:0xffffff, transparent:true, opacity:0.5 });
+    const ringIn = new THREE.Mesh(new THREE.TorusGeometry(24, 0.16, 6, 72), ringMat);
+    ringIn.position.z = -56;
+    channel.add(ringIn);
+    const ringOut = new THREE.Mesh(new THREE.TorusGeometry(24, 0.16, 6, 72), ringMat);
+    ringOut.position.z = 56;
+    channel.add(ringOut);
+
+    // CFD mesh shroud — translucent wireframe echoing the Fluent flow-volume render
+    const shroud = new THREE.Mesh(new THREE.CylinderGeometry(24, 24, TUBE_HALF*2, 22, 4, true), shroudMat);
+    shroud.rotation.x = Math.PI/2;
+    channel.add(shroud);
+
+    // the tube — visible duct wall, stays visible in every scroll state
+    const ductWall = new THREE.Mesh(
+      new THREE.CylinderGeometry(33, 33, TUBE_HALF*2, 26, 1, true),
+      new THREE.MeshStandardMaterial({ color:0x33475c, metalness:0.35, roughness:0.6, transparent:true, opacity:0.24, side:THREE.DoubleSide })
+    );
+    ductWall.rotation.x = Math.PI/2;
+    channel.add(ductWall);
+
+    // CFD flow particles — blue at inlet, shift to red crossing stator-rotor-stator (pressure rise)
+    const N = 220;
+    const flowGeo = new THREE.BufferGeometry();
+    const flowPos = new Float32Array(N*3);
+    const flowCol = new Float32Array(N*3);
+    const baseZ = new Float32Array(N);
+    for(let i=0;i<N;i++){
+      const r = Math.sqrt(Math.random())*25;
+      const a = Math.random()*Math.PI*2;
+      flowPos[i*3]   = Math.cos(a)*r;
+      flowPos[i*3+1] = Math.sin(a)*r;
+      const z0 = (Math.random()*2-1)*TUBE_HALF;
+      flowPos[i*3+2] = z0;
+      baseZ[i] = z0;
+    }
+    flowGeo.setAttribute('position', new THREE.BufferAttribute(flowPos,3));
+    flowGeo.setAttribute('color', new THREE.BufferAttribute(flowCol,3));
+    const flowMat = new THREE.PointsMaterial({ size:3.2, vertexColors:true, transparent:true, opacity:0.9, depthWrite:false });
+    const flow = new THREE.Points(flowGeo, flowMat);
+    channel.add(flow);
+
+    // motor + shaft + seal, sits beyond the tube — reads once the housing goes translucent
+    const motorGroup = new THREE.Group();
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(3,3,40,10), shaftMat);
+    shaft.rotation.x = Math.PI/2;
+    shaft.position.z = 76;
+    motorGroup.add(shaft);
+    const seal = new THREE.Mesh(new THREE.CylinderGeometry(7,7,8,14), shaftMat);
+    seal.rotation.x = Math.PI/2;
+    seal.position.z = 58;
+    motorGroup.add(seal);
+    const coupling = new THREE.Mesh(new THREE.CylinderGeometry(6,6,10,12), shaftMat);
+    coupling.rotation.x = Math.PI/2;
+    coupling.position.z = 98;
+    motorGroup.add(coupling);
+    const motorBody = new THREE.Mesh(new THREE.CylinderGeometry(15,15,38,20), motorMat);
+    motorBody.rotation.x = Math.PI/2;
+    motorBody.position.z = 124;
+    motorGroup.add(motorBody);
+    channel.add(motorGroup);
+
+    return { channel, statorIn, rotor, statorOut, shroud, ductWall, flow, baseZ, motorGroup, statorMat, motorMat };
+  }
+
+  const left  = buildChannel();
+  const right = buildChannel();
+  // orient each channel vertically (nose up, motor down) so the front view reads like the real CAD elevation
+  left.channel.rotation.x  = Math.PI/2;
+  right.channel.rotation.x = Math.PI/2;
+  left.channel.position.x  = -60;
+  right.channel.position.x =  60;
+  scene.add(left.channel, right.channel);
+
+  // ---------- MOTOR CONNECTOR — bridges the two motor pods together ----------
+  const connMat = new THREE.MeshPhysicalMaterial({ color:0x9aa7b5, metalness:0.92, roughness:0.14, clearcoat:0.6, transparent:true, opacity:1 });
+  const motorConnGroup = new THREE.Group();
+  const connBar = new THREE.Mesh(new THREE.CylinderGeometry(5, 5, 120, 16), connMat);
+  connBar.rotation.z = Math.PI/2;
+  connBar.position.set(0, -124, 0);
+  motorConnGroup.add(connBar);
+  const connCapL = new THREE.Mesh(new THREE.CylinderGeometry(9, 9, 6, 14), connMat);
+  connCapL.rotation.z = Math.PI/2;
+  connCapL.position.set(-60, -124, 0);
+  motorConnGroup.add(connCapL);
+  const connCapR = connCapL.clone();
+  connCapR.position.x = 60;
+  motorConnGroup.add(connCapR);
+  scene.add(motorConnGroup);
+
+  // ---------- U-SHAPED CONNECTING PIPE — links inlet (left) to outlet (right) around the outside ----------
+  const uCurve = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-60, 106, 0),
+    new THREE.Vector3(-60, 150, 0),
+    new THREE.Vector3(-30, 175, 0),
+    new THREE.Vector3(  0, 182, 0),
+    new THREE.Vector3( 30, 175, 0),
+    new THREE.Vector3( 60, 150, 0),
+    new THREE.Vector3( 60, 106, 0),
+  ]);
+  const uPipeMat = new THREE.MeshStandardMaterial({ color:0x33475c, metalness:0.35, roughness:0.6, transparent:true, opacity:0.5, side:THREE.DoubleSide });
+  const uPipe = new THREE.Mesh(new THREE.TubeGeometry(uCurve, 40, 14, 16, false), uPipeMat);
+  scene.add(uPipe);
+  const inletNub = new THREE.Mesh(new THREE.CylinderGeometry(15,15,10,20), uPipeMat);
+  inletNub.position.set(-60, 104, 0);
+  scene.add(inletNub);
+  const outletNub = inletNub.clone();
+  outletNub.position.x = 60;
+  scene.add(outletNub);
+
+  // ---------- OUTER HOUSING (stubby drum with a bolted round face, matches the prototype photo) ----------
+  const housing = new THREE.Group();
+  const housingShell = new THREE.Mesh(new THREE.CylinderGeometry(148, 148, 168, 44, 1, true), housingMat);
+  housingShell.material.side = THREE.DoubleSide;
+  housingShell.rotation.x = Math.PI/2;
+  housing.add(housingShell);
+  const housingCapFront = new THREE.Mesh(new THREE.CircleGeometry(148, 44), housingMat);
+  housingCapFront.position.z = -84;
+  housing.add(housingCapFront);
+  const housingCapBack = new THREE.Mesh(new THREE.CircleGeometry(148, 44), housingMat);
+  housingCapBack.position.z = 84;
+  housingCapBack.rotation.y = Math.PI;
+  housing.add(housingCapBack);
+  const rimRing = new THREE.Mesh(new THREE.TorusGeometry(148, 3.5, 10, 44), hubMat);
+  rimRing.position.z = -84;
+  housing.add(rimRing);
+  // bolt ring, echoing the bolted flange in the reference photo
+  for(let i=0;i<16;i++){
+    const bolt = new THREE.Mesh(new THREE.CylinderGeometry(3.4,3.4,4,8), hubMat);
+    const a = (i/16)*Math.PI*2;
+    bolt.position.set(Math.cos(a)*138, Math.sin(a)*138, -86);
+    bolt.rotation.x = Math.PI/2;
+    housing.add(bolt);
+  }
+  scene.add(housing);
+
+  // ---------- LABELS ----------
+  function makeLabel(text){
+    const el = document.createElement('div');
+    el.className = 'part-label';
+    el.innerHTML = `<span class="dot"></span><span>${text}</span>`;
+    labelLayer.appendChild(el);
+    return el;
+  }
+  const statorInLabel  = makeLabel('<span class="pnum">STATOR</span> Inlet vanes — conditions flow');
+  const rotorLabel      = makeLabel('<span class="pnum">ROTOR</span> Impeller — helical blade band');
+  const statorOutLabel  = makeLabel('<span class="pnum">STATOR</span> Outlet vanes — removes swirl');
+  const motorLabel      = makeLabel('<span class="pnum">MOTOR ×2</span> Brushless drive, sealed shaft');
+  const inletLabel      = makeLabel('<span class="pnum">INLET</span> Flow enters here');
+  const outletLabel     = makeLabel('<span class="pnum">OUTLET</span> Flow exits here');
+
+  // ---------- SCROLL PROGRESS ----------
+  let progress = 0;
+  function readProgress(){
+    const rect = wrap.getBoundingClientRect();
+    const total = rect.height - window.innerHeight;
+    progress = Math.max(0, Math.min(1, -rect.top / total));
+  }
+  window.addEventListener('scroll', readProgress, { passive:true });
+
+  // camera keyframes: A overview(isometric) -> B stator-rotor-stator close (left channel) -> C front cross-section (matches CAD elevation)
+  const camA = new THREE.Vector3(300, 30, 380);
+  const camB = new THREE.Vector3(25, -90, 170);
+  const camC = new THREE.Vector3(0, -25, 430);
+  const lookA = new THREE.Vector3(0,-25,0);
+  const lookB = new THREE.Vector3(-60,0,0);
+  const lookC = new THREE.Vector3(0,-25,0);
+
+  // up-vectors control camera roll — camB is tilted to match the diagonal framing in the reference render
+  const upA = new THREE.Vector3(0,1,0);
+  const upB = new THREE.Vector3(Math.sin(0.95), Math.cos(0.95), 0); // ~54 degree roll: axis lays down diagonally, far end upper-left, near end lower-right
+  const upC = new THREE.Vector3(0,1,0);
+
+  camera.position.copy(camA);
+  const targetPos = new THREE.Vector3().copy(camA);
+  const targetLook = new THREE.Vector3().copy(lookA);
+  const currentLook = new THREE.Vector3().copy(lookA);
+  const targetUp = new THREE.Vector3().copy(upA);
+  const currentUp = new THREE.Vector3().copy(upA);
+
+  function ease(t){ return t<0.5 ? 2*t*t : 1-Math.pow(-2*t+2,2)/2; }
+
+  function hideCurve(t){
+    // right channel + duct/shroud/flow: hides during the middle close-up, comes back for the cross-section finale
+    if(t < 0.3) return 1 - ease(t/0.3);
+    if(t < 0.7) return 0;
+    return ease((t-0.7)/0.3);
+  }
+  function housingCurve(t){
+    // like hideCurve but final resting opacity is only 0.16 (x-ray, not solid)
+    const h = hideCurve(t);
+    if(t >= 0.7) return h * 0.16;
+    return h;
+  }
+  function motorCurve(t){
+    if(t < 0.7) return 0;
+    return ease((t-0.7)/0.3);
+  }
+  function stateLabel(t){
+    if(t < 0.32) return 'Overview';
+    if(t < 0.68) return 'Rotor–Stator';
+    return 'Cross-Section';
+  }
+
+  const clock = new THREE.Clock();
+  const tmpProject = new THREE.Vector3();
+  const FLOW_SPEED = 0.09; // fraction of the path per second
+
+  function animate(){
+    requestAnimationFrame(animate);
+    const dt = Math.min(clock.getDelta(), 0.05);
+    const elapsed = clock.getElapsedTime();
+
+    // continuous rotor spin — always alive, independent of scroll
+    const spin = dt * (reduceMotion ? 0.15 : 2.4);
+    left.rotor.rotation.z  += spin;
+    right.rotor.rotation.z += spin;
+
+    // CFD flow: particles advect straight along the tube, blue -> red crossing rotor -> stator (pressure rise)
+    const flowRate = reduceMotion ? FLOW_SPEED*0.2 : FLOW_SPEED;
+    [left, right].forEach(ch => {
+      const pos = ch.flow.geometry.attributes.position;
+      const col = ch.flow.geometry.attributes.color;
+      for(let i=0;i<ch.baseZ.length;i++){
+        const z = ((ch.baseZ[i] + elapsed*flowRate*TUBE_HALF*2 + TUBE_HALF) % (TUBE_HALF*2)) - TUBE_HALF;
+        pos.array[i*3+2] = z;
+        const c = colorForZ(z);
+        col.array[i*3]   = c.r;
+        col.array[i*3+1] = c.g;
+        col.array[i*3+2] = c.b;
+      }
+      pos.needsUpdate = true;
+      col.needsUpdate = true;
+    });
+
+    // camera path: two-segment lerp through overview -> close -> cross-section
+    const t = progress;
+    if(t < 0.5){
+      const localT = ease(t/0.5);
+      targetPos.lerpVectors(camA, camB, localT);
+      targetLook.lerpVectors(lookA, lookB, localT);
+      targetUp.lerpVectors(upA, upB, localT).normalize();
+    } else {
+      const localT = ease((t-0.5)/0.5);
+      targetPos.lerpVectors(camB, camC, localT);
+      targetLook.lerpVectors(lookB, lookC, localT);
+      targetUp.lerpVectors(upB, upC, localT).normalize();
+    }
+    camera.position.lerp(targetPos, 0.08);
+    currentLook.lerp(targetLook, 0.08);
+    currentUp.lerp(targetUp, 0.08).normalize();
+    camera.up.copy(currentUp);
+    camera.lookAt(currentLook);
+
+    // visibility / material curves
+    const hOp = housingCurve(t);
+    housingMat.opacity = Math.max(0.02, hOp);
+    housing.visible = true;
+
+    // right channel hides during the final close-up so focus stays on the left rotor–stator pair
+    const rOp = hideCurve(t);
+    right.shroud.material.opacity = 0.14 * rOp;
+    right.ductWall.material.opacity = 0.22 * rOp;
+    right.flow.material.opacity = 0.9 * rOp;
+    right.channel.traverse(o => {
+      if((o.isMesh || o.isPoints) && o !== right.shroud && o !== right.ductWall && o !== right.flow){
+        o.visible = rOp > 0.03;
+      }
+    });
+    // the connecting pipe + motor bridge span both channels — fade them out alongside the right channel
+    uPipeMat.opacity = 0.5 * rOp;
+    connMat.opacity = rOp;
+    motorConnGroup.visible = rOp > 0.03;
+    // the left channel's duct + particles also fade during the close-up so the impeller reads on a clean background
+    left.ductWall.material.opacity = 0.24 * rOp;
+    left.flow.material.opacity = 0.9 * rOp;
+
+    // motors stay physically present the whole time — the outer housing opacity is what reveals them
+    const mOp = motorCurve(t);
+    left.motorMat.emissiveIntensity = mOp * 1.4;
+    right.motorMat.emissiveIntensity = mOp * 1.4;
+    motorLight.intensity = mOp * 1.2;
+
+    // labels: stator/rotor/stator active during the final close-up, motor + inlet/outlet active at the cross-section midpoint
+    function project(worldPos){
+      tmpProject.copy(worldPos).project(camera);
+      const w = stage.clientWidth, h = stage.clientHeight;
+      return { x:(tmpProject.x*0.5+0.5)*w, y:(-tmpProject.y*0.5+0.5)*h };
+    }
+    const statorInWorld = new THREE.Vector3(); left.statorIn.getWorldPosition(statorInWorld);
+    const rotorWorld = new THREE.Vector3(); left.rotor.getWorldPosition(rotorWorld);
+    const statorOutWorld = new THREE.Vector3(); left.statorOut.getWorldPosition(statorOutWorld);
+    const motorWorld = new THREE.Vector3(); left.motorGroup.getWorldPosition(motorWorld);
+    const inletWorld = inletNub.position;
+    const outletWorld = outletNub.position;
+
+    const pSI = project(statorInWorld), pR = project(rotorWorld), pSO = project(statorOutWorld), pM = project(motorWorld);
+    const pIn = project(inletWorld), pOut = project(outletWorld);
+    statorInLabel.style.transform  = `translate(${pSI.x-170}px, ${pSI.y-30}px)`;
+    rotorLabel.style.transform     = `translate(${pR.x+50}px, ${pR.y}px)`;
+    statorOutLabel.style.transform = `translate(${pSO.x-170}px, ${pSO.y+30}px)`;
+    motorLabel.style.transform     = `translate(${pM.x+50}px, ${pM.y}px)`;
+    inletLabel.style.transform     = `translate(${pIn.x-190}px, ${pIn.y-10}px)`;
+    outletLabel.style.transform    = `translate(${pOut.x+40}px, ${pOut.y-10}px)`;
+
+    statorInLabel.classList.toggle('active', t>0.34 && t<0.66);
+    rotorLabel.classList.toggle('active', t>0.34 && t<0.66);
+    statorOutLabel.classList.toggle('active', t>0.34 && t<0.66);
+    motorLabel.classList.toggle('active', t>0.78);
+    inletLabel.classList.toggle('active', t>0.78);
+    outletLabel.classList.toggle('active', t>0.78);
+
+    pnDisplay.textContent = stateLabel(t);
+
+    renderer.render(scene, camera);
+  }
+
+  resize();
+  readProgress();
+  window.addEventListener('resize', resize);
+  animate();
+})();
+</script>
+
+</body>
+</html>

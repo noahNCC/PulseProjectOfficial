@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
+import * as THREE from "three";
 import { motion, useInView, useScroll, useTransform } from "motion/react";
 import {
   ArrowRight, Users, Layers, Cpu,
@@ -109,12 +110,6 @@ const SPONSOR_BLURBS: Record<string, string> = {
   "ISMCS":           "The International Society for Mechanical Circulatory Support hosts the Heart Hackathon competition we compete in annually.",
 };
 
-const CFD_STAGES = [
-  { label: "Axial Flow Design",     body: "Our TAH uses an axial flow pump design, drawing blood through a rotating impeller to generate continuous, physiologically appropriate flow.", col: BLU_L },
-  { label: "Rotor & Stator Stages", body: "The rotor spins at ~3,000 RPM while the downstream stator blades remain stationary, converting rotational kinetic energy into pressure rise.", col: RED_L },
-  { label: "Mock Circulatory Loop", body: "We validate our design using a custom-built MCL which simulates physiological blood flow to test performance under realistic conditions.", col: BLU_L },
-  { label: "Electrical System",     body: "Wireless power transfer, a high-efficiency motor, and sensor-driven feedback control deliver adaptive, physiologically responsive blood flow.", col: RED_L },
-];
 
 // ─── Hooks ────────────────────────────────────────────────────────────────────
 
@@ -569,398 +564,344 @@ function Stats() {
   );
 }
 
-// ─── PUMP SVG RENDER ──────────────────────────────────────────────────────────
-// Blade geometry based on image-19 (Ansys 3D) and image-20 (SolidWorks CAD):
-//  - Wide-chord, highly-swept propeller/impeller blades (marine propeller shape)
-//  - Aggressive backward sweep: LE at root x=-8, LE at tip x=-36 (28px sweep)
-//  - Chord at tip ~50px — matches the wide blade visible in image-20
-//  - Blood flow particles swirl as they pass through rotor zone (image-19 helical flow)
-//  - Particles enter axially → get deflected by spinning blades → straighten at outlet stator
-
-function PumpRenderSVG({ stage }: { stage: 1 | 2 | 3 }) {
-  const cfd  = stage === 3;
-  const fast = stage >= 2;
-  const uid  = `s${stage}`;
-
-  // Blood flow streamlines: each particle swirls up/down as it passes through the rotor zone
-  // baseY = axial lane, swirl = how much it deflects at rotor midpoint (mimics blade sweep)
-  const FLOW_LINES = [
-    { baseY: 148, swirl: 16,  delay: 0.00 },
-    { baseY: 160, swirl: -13, delay: 0.28 },
-    { baseY: 172, swirl: 18,  delay: 0.55 },
-    { baseY: 184, swirl: -11, delay: 0.82 },
-    { baseY: 196, swirl: 15,  delay: 0.10 },
-    { baseY: 208, swirl: -14, delay: 0.38 },
-    { baseY: 220, swirl: 17,  delay: 0.65 },
-    { baseY: 232, swirl: -10, delay: 0.92 },
-    { baseY: 244, swirl: 14,  delay: 0.20 },
-  ];
-
-  const flowDur = cfd ? 1.0 : 1.9;
-
-  return (
-    <svg viewBox="0 0 640 420" className="w-full h-full">
-      <defs>
-        {/* Circumferential CFD: red top (high velocity) → blue bottom (low velocity) */}
-        <linearGradient id={`pCFDCirc${uid}`} x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%"   stopColor="#cc0011" stopOpacity="0.97"/>
-          <stop offset="10%"  stopColor="#ff3300" stopOpacity="0.94"/>
-          <stop offset="22%"  stopColor="#ff7700"/>
-          <stop offset="35%"  stopColor="#ffcc00"/>
-          <stop offset="48%"  stopColor="#aaff00"/>
-          <stop offset="60%"  stopColor="#00ffaa"/>
-          <stop offset="72%"  stopColor="#00aaff"/>
-          <stop offset="86%"  stopColor="#0044dd"/>
-          <stop offset="100%" stopColor="#001188" stopOpacity="0.93"/>
-        </linearGradient>
-
-        {/* Colorbar (Ansys legend: blue 0 → red 3.2 m/s) */}
-        <linearGradient id={`pCFDBar${uid}`} x1="0%" y1="0%" x2="100%" y2="0%">
-          <stop offset="0%"   stopColor="#001188"/>
-          <stop offset="30%"  stopColor="#0044dd"/>
-          <stop offset="50%"  stopColor="#00ffaa"/>
-          <stop offset="70%"  stopColor="#ffcc00"/>
-          <stop offset="100%" stopColor="#cc0011"/>
-        </linearGradient>
-
-        {/* Housing fill non-CFD */}
-        <linearGradient id={`pHousing${uid}`} x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%"   stopColor="#1a2a5a"/>
-          <stop offset="50%"  stopColor="#0d1840"/>
-          <stop offset="100%" stopColor="#040810"/>
-        </linearGradient>
-
-        {/* Torpedo */}
-        <linearGradient id={`pTorp${uid}`} x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%"   stopColor="#3060b0"/>
-          <stop offset="40%"  stopColor="#1a3478"/>
-          <stop offset="100%" stopColor="#060c22"/>
-        </linearGradient>
-
-        {/* Outlet disc — solid dark red (image-19: solid maroon end disc) */}
-        <radialGradient id={`pOutlet${uid}`} cx="40%" cy="36%" r="62%">
-          <stop offset="0%"   stopColor="#cc2200"/>
-          <stop offset="50%"  stopColor="#881400"/>
-          <stop offset="100%" stopColor="#440800"/>
-        </radialGradient>
-
-        {/* Rotor blade — blue-steel, lighter toward tip */}
-        <linearGradient id={`pBlade${uid}`} x1="0%" y1="100%" x2="0%" y2="0%">
-          <stop offset="0%"   stopColor="#1a3068"/>
-          <stop offset="55%"  stopColor="#2a50b8"/>
-          <stop offset="100%" stopColor="#4070d8"/>
-        </linearGradient>
-
-        {/* Stator vane — darker blue */}
-        <linearGradient id={`pVane${uid}`} x1="0%" y1="100%" x2="0%" y2="0%">
-          <stop offset="0%"   stopColor="#0c1838"/>
-          <stop offset="100%" stopColor="#1e3478"/>
-        </linearGradient>
-
-        {/* Housing front ring face */}
-        <radialGradient id={`pFaceInlet${uid}`} cx="38%" cy="36%" r="64%">
-          <stop offset="0%"   stopColor="#1a2a5a"/>
-          <stop offset="100%" stopColor="#04081a"/>
-        </radialGradient>
-
-        {/* Rotor glow */}
-        <filter id={`pGlow${uid}`} x="-40%" y="-40%" width="180%" height="180%">
-          <feGaussianBlur stdDeviation="5.5" result="blur"/>
-          <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
-        </filter>
-
-        {/* Clip isocontour lines to housing rectangle */}
-        <clipPath id={`pClip${uid}`}>
-          <rect x="216" y="114" width="232" height="172"/>
-        </clipPath>
-      </defs>
-
-      {/* Whole pump tilted ~22° isometrically; all centers at y=200 = coaxial */}
-      <g transform="rotate(-22, 320, 200)">
-
-        {/* OUTLET DISC — solid dark maroon (image-19: solid red disc at right end) */}
-        <g transform="translate(528, 200)">
-          <circle r="82" fill={`url(#pOutlet${uid})`} stroke="#991100" strokeWidth="1.8"/>
-          {/* 3 wide swept vane blades on disc face (static outlet stator) */}
-          {[20, 140, 260].map(a => (
-            <g key={a} transform={`rotate(${a})`}>
-              {/* Wide swept propeller blade: root 18px chord, tip 48px chord, aggressive LE sweep */}
-              <path d="M-4,-18 L-16,-66 Q-10,-74 10,-66 L8,-18 Q0,-12 -4,-18 Z"
-                fill={`url(#pVane${uid})`} stroke={`${BLU_L}50`} strokeWidth="0.9"/>
-            </g>
-          ))}
-          <circle r="14" fill="#06091e" stroke={`${BLU_L}55`} strokeWidth="1.5"/>
-        </g>
-
-        {/* Housing back end-cap */}
-        <ellipse cx="448" cy="200" rx="12" ry="86"
-          fill="#05081a" stroke={BLU_L} strokeWidth="0.8" strokeOpacity="0.28"/>
-
-        {/* Housing cylinder body */}
-        <rect x="216" y="114" width="232" height="172"
-          fill={cfd ? `url(#pCFDCirc${uid})` : `url(#pHousing${uid})`}/>
-
-        {/* CFD isocontour lines clipped to housing */}
-        {cfd && (
-          <g clipPath={`url(#pClip${uid})`}>
-            {[122,135,148,160,172,184,196,208,220,232,244,258,270].map((y, i) => {
-              const w1 = i % 2 === 0 ? 3.5 : -3.5;
-              const w2 = i % 3 === 0 ? 2.2 : -2.2;
-              const t = (y - 114) / 172;
-              const col = t < 0.15 ? "#ff4400" : t < 0.30 ? "#ff9900" : t < 0.45 ? "#ffdd00"
-                        : t < 0.55 ? "#88ff00" : t < 0.68 ? "#00ffaa" : t < 0.82 ? "#00aaff" : "#0044dd";
-              return (
-                <path key={y} fill="none"
-                  d={`M216,${y} C248,${y+w1} 288,${y-w1} 330,${y+w2} S400,${y-w2} 448,${y}`}
-                  stroke={col} strokeWidth="0.75" strokeOpacity="0.48"/>
-              );
-            })}
-          </g>
-        )}
-
-        {/* Housing rim lines */}
-        <line x1="216" y1="114" x2="448" y2="114" stroke={BLU_L} strokeWidth="2" strokeOpacity="0.52"/>
-        <line x1="216" y1="286" x2="448" y2="286" stroke={BLU_L} strokeWidth="0.7" strokeOpacity="0.22"/>
-
-        {/* Blood channel interior dark core */}
-        <rect x="216" y="132" width="232" height="136" fill="#030810" fillOpacity="0.78"/>
-
-        {/* ── BLOOD FLOW PARTICLES ──────────────────────────────────────────────
-            Each particle enters axially (cx 220), gets swept/deflected by the rotor
-            at cx≈320-345 (swirl in Y), then straightened by outlet stator (cx 380+).
-            Mimics the helical streamlines visible in image-19's CFD velocity contours. */}
-        {FLOW_LINES.map(({ baseY, swirl, delay }, i) => {
-          const hot  = baseY < 168 || baseY > 228;
-          const warm = baseY < 184 || baseY > 212;
-          const pCol = cfd
-            ? (hot ? "#ff5500" : warm ? "#ffcc00" : i % 2 === 0 ? "#00ffcc" : "#00aaff")
-            : `rgba(91,130,232,${0.42 + (i % 3) * 0.1})`;
-          const r = cfd ? 2.8 : 1.8;
-          // cx keyframes: enter → pre-rotor → rotor peak → post-rotor → exit
-          // cy keyframes: straight → straight → deflected → returning → straight
-          return (
-            <motion.circle
-              key={`fl${uid}${i}`}
-              r={r}
-              fill={pCol}
-              animate={{
-                cx: [222, 298, 332, 366, 442],
-                cy: [baseY, baseY, baseY + swirl, baseY + swirl * 0.3, baseY],
-                opacity: [0, 0.92, 0.92, 0.88, 0],
-              }}
-              transition={{
-                duration: flowDur + i * 0.06,
-                delay: delay,
-                repeat: Infinity,
-                ease: "linear",
-                times: [0, 0.34, 0.50, 0.64, 1],
-              }}
-            />
-          );
-        })}
-
-        {/* ── ROTOR — spinning impeller, coaxial at (330, 200) ─────────────────
-            Blade geometry from image-19 (Ansys 3D) and image-20 (SolidWorks):
-            - Wide-chord propeller/marine-impeller blades
-            - Root chord 18px, tip chord ~50px
-            - Aggressive backward LE sweep: root x=-8, tip x=-36 (28px sweep)
-            - This matches the swept-back blade profile in image-20 top assembly */}
-        <g transform="translate(330, 200)">
-          <g className={fast ? "rotor-fast" : "rotor-spin"} filter={`url(#pGlow${uid})`}>
-            {[0, 120, 240].map(a => (
-              <g key={a} transform={`rotate(${a})`}>
-                {/* Propeller blade: wide chord, aggressive backward sweep at LE, slight forward TE */}
-                <path d="M-5,-18 C-9,-36 -18,-56 -22,-72 Q-14,-80 10,-72 C6,-56 4,-36 5,-18 Q0,-12 -5,-18 Z"
-                  fill={`url(#pBlade${uid})`} stroke={BLU_L} strokeWidth="1.2" strokeOpacity="0.9"/>
-              </g>
-            ))}
-            <circle r="14" fill="#0a1332" stroke={BLU_L} strokeWidth="2.2"/>
-          </g>
-        </g>
-
-        {/* TORPEDO — central bullet shaft */}
-        <path d="M76,200 Q108,185 216,178 L216,222 Q108,215 76,200 Z" fill={`url(#pTorp${uid})`}/>
-        <rect x="216" y="178" width="232" height="44" fill={`url(#pTorp${uid})`}/>
-        <line x1="82" y1="188" x2="448" y2="188" stroke={BLU_L} strokeWidth="1" strokeOpacity="0.28"/>
-        <path d="M448,178 Q482,182 532,200 Q482,218 448,222 L448,178 Z" fill={`url(#pTorp${uid})`}/>
-
-        {/* Housing front cap ring (inlet end) */}
-        <ellipse cx="216" cy="200" rx="13" ry="86"
-          fill={`url(#pFaceInlet${uid})`} stroke={BLU_L} strokeWidth="2" strokeOpacity="0.68"/>
-        <ellipse cx="216" cy="200" rx="8" ry="70"
-          fill="#030810" stroke={`${BLU_L}44`} strokeWidth="0.5"/>
-
-        {/* INLET DISC — thin white circle outline (image-19: transparent ring at inlet end) */}
-        <g transform="translate(108, 200)">
-          <circle r="92" fill="none" stroke="rgba(255,255,255,0.55)" strokeWidth="2.5"/>
-          <circle r="74" fill="none" stroke={`${BLU_L}38`} strokeWidth="0.8"/>
-          {/* 3 wide swept inlet stator vanes (same propeller blade shape as rotor) */}
-          {[20, 140, 260].map(a => (
-            <g key={a} transform={`rotate(${a})`}>
-              <path d="M-4,-18 L-18,-76 Q-12,-84 10,-76 L8,-18 Q0,-12 -4,-18 Z"
-                fill={`url(#pVane${uid})`} stroke={BLU_L} strokeWidth="1.3" strokeOpacity="0.72"/>
-            </g>
-          ))}
-          <circle r="14" fill="#0c1a3a" stroke={BLU_L} strokeWidth="1.5" strokeOpacity="0.6"/>
-        </g>
-
-      </g>
-
-      {/* CFD velocity colorbar */}
-      {cfd && (
-        <g>
-          <text x="108" y="392" fontSize="8.5" fill={BLU_L}
-            fontFamily="'JetBrains Mono',monospace" fillOpacity="0.52">0 m/s</text>
-          <rect x="134" y="382" width="190" height="7" rx="2.5"
-            fill={`url(#pCFDBar${uid})`} opacity="0.9"/>
-          <text x="328" y="392" fontSize="8.5" fill={RED}
-            fontFamily="'JetBrains Mono',monospace" fillOpacity="0.52">3.2 m/s</text>
-        </g>
-      )}
-
-      <text x="320" y={cfd ? 372 : 388} textAnchor="middle" fontSize="9" fill={BLU_L}
-        fontFamily="'JetBrains Mono',monospace" fillOpacity="0.28" letterSpacing="3.5">
-        {cfd ? "VELOCITY FIELD — ANSYS FLUENT" : "PULSE TAH — AXIAL FLOW PUMP"}
-      </text>
-    </svg>
-  );
-}
-
-// ─── TAH Scroll Visualizer ────────────────────────────────────────────────────
+// ─── TAH 3D Scroll Visualizer ─────────────────────────────────────────────────
 
 function HeartVisual() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const { scrollYProgress } = useScroll({ target: containerRef, offset: ["start start", "end end"] });
+  const wrapRef       = useRef<HTMLDivElement>(null);
+  const canvasRef     = useRef<HTMLCanvasElement>(null);
+  const labelLayerRef = useRef<HTMLDivElement>(null);
+  const pnDisplayRef  = useRef<HTMLSpanElement>(null);
 
-  const s1Opacity = useTransform(scrollYProgress, [0, 0.26, 0.42], [1, 1, 0]);
-  const s2Opacity = useTransform(scrollYProgress, [0.26, 0.44, 0.60, 0.76], [0, 1, 1, 0]);
-  const s3Opacity = useTransform(scrollYProgress, [0.60, 0.78], [0, 1]);
-  const cardsOpacity = useTransform(scrollYProgress, [0.06, 0.24], [0, 1]);
-  const cardsY       = useTransform(scrollYProgress, [0.06, 0.24], [20, 0]);
-  const zoomScale     = useTransform(scrollYProgress, [0.30, 0.58], [1, 2.4]);
-  const bubbleOpacity = useTransform(scrollYProgress, [0.44, 0.60], [0, 1]);
+  useEffect(() => {
+    const canvas     = canvasRef.current;
+    const wrap       = wrapRef.current;
+    const labelLayer = labelLayerRef.current;
+    const pnDisplay  = pnDisplayRef.current;
+    if (!canvas || !wrap || !labelLayer || !pnDisplay) return;
+
+    const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+    const scene    = new THREE.Scene();
+    const camera   = new THREE.PerspectiveCamera(40, 1, 1, 3000);
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+
+    function resize() {
+      const w = canvas.clientWidth || window.innerWidth;
+      const h = canvas.clientHeight || window.innerHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h, false);
+    }
+
+    // Lights
+    scene.add(new THREE.AmbientLight(0x3a4a5c, 1.0));
+    const kL = new THREE.DirectionalLight(0xe8ecf1, 1.2); kL.position.set(200, 300, 400); scene.add(kL);
+    const fL = new THREE.DirectionalLight(0xaebfd4, 0.55); fL.position.set(-250, -80, 180); scene.add(fL);
+    const rL = new THREE.DirectionalLight(0x4fa8ff, 0.9); rL.position.set(-300, 100, -200); scene.add(rL);
+    const redLight = new THREE.PointLight(0xff3b2f, 0.6, 700, 2); redLight.position.set(-160, 90, 60); scene.add(redLight);
+    const motorLight = new THREE.PointLight(0x4fa8ff, 0, 260, 2); motorLight.position.set(0, -124, 0); scene.add(motorLight);
+
+    // Materials
+    const hubMat      = new THREE.MeshPhysicalMaterial({ color: 0xb7c1cc, metalness: 0.92, roughness: 0.16, clearcoat: 0.6, clearcoatRoughness: 0.2 });
+    const impellerMat = new THREE.MeshStandardMaterial({ color: 0x5b7fd6, metalness: 0.12, roughness: 0.5, side: THREE.DoubleSide });
+    const housingMat  = new THREE.MeshStandardMaterial({ color: 0x2c3846, metalness: 0.3, roughness: 0.6, transparent: true, opacity: 1, side: THREE.DoubleSide });
+    const shaftMat    = new THREE.MeshPhysicalMaterial({ color: 0x9aa7b5, metalness: 0.92, roughness: 0.14, clearcoat: 0.6 });
+
+    function buildPropBlade(hubR: number, len: number, chord: number, pitch: number) {
+      const s = new THREE.Shape();
+      s.moveTo(hubR, -chord * 0.5); s.lineTo(hubR + len, -chord * 0.5);
+      s.lineTo(hubR + len, chord * 0.5); s.lineTo(hubR, chord * 0.5); s.closePath();
+      const geo = new THREE.ExtrudeGeometry(s, { depth: 2.2, bevelEnabled: true, bevelThickness: 0.5, bevelSize: 0.5, bevelSegments: 2 });
+      geo.translate(0, 0, -1.1);
+      geo.rotateY(THREE.MathUtils.degToRad(pitch));
+      return geo;
+    }
+    function buildProp(hubR: number, len: number, chord: number, pitch: number, count: number, mat: THREE.Material, phase: number) {
+      const g = new THREE.Group();
+      const bGeo = buildPropBlade(hubR, len, chord, pitch);
+      for (let i = 0; i < count; i++) {
+        const b = new THREE.Mesh(bGeo, mat); b.rotation.z = phase + i * (Math.PI * 2 / count); g.add(b);
+      }
+      g.add(new THREE.Mesh(new THREE.SphereGeometry(Math.max(3.4, hubR * 1.15), 16, 12), mat));
+      return g;
+    }
+    function colorForZ(z: number) {
+      const x = Math.max(0, Math.min(1, (z - (-46)) / (-6 - (-46)))); const mix = x * x * (3 - 2 * x);
+      return { r: 0.31 + 0.69 * mix, g: 0.66 - 0.43 * mix, b: 1.0 - 0.82 * mix };
+    }
+    function buildBandBlade(hubR: number, tipR: number, len: number, turns: number, segs: number, phase: number) {
+      const pos: number[] = [], idx: number[] = [];
+      for (let i = 0; i <= segs; i++) {
+        const t = i / segs, z = -len / 2 + t * len, a = phase + t * turns * Math.PI * 2;
+        pos.push(hubR * Math.cos(a), hubR * Math.sin(a), z, tipR * Math.cos(a), tipR * Math.sin(a), z);
+      }
+      for (let i = 0; i < segs; i++) { const a=i*2,b=a+1,c=a+2,d=a+3; idx.push(a,b,c,b,d,c); }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      geo.setIndex(idx); geo.computeVertexNormals(); return geo;
+    }
+    function makeContourTex() {
+      const c = document.createElement("canvas"); c.width = 512; c.height = 256;
+      const ctx = c.getContext("2d")!;
+      const g = ctx.createLinearGradient(0, 0, 0, 256);
+      g.addColorStop(0, "#a4d64f"); g.addColorStop(0.45, "#7cc93f"); g.addColorStop(1, "#b9e35b");
+      ctx.fillStyle = g; ctx.fillRect(0, 0, 512, 256);
+      ctx.strokeStyle = "rgba(24,84,26,0.5)"; ctx.lineWidth = 1;
+      for (let i = 0; i < 26; i++) {
+        ctx.beginPath();
+        for (let x = 0; x <= 512; x += 8) {
+          const y = (i/26)*256 + Math.sin((x/512)*Math.PI*6+i*0.7)*6 + Math.sin(x*0.05+i)*2;
+          x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+      ctx.strokeStyle = "rgba(232,220,70,0.45)"; ctx.lineWidth = 5;
+      [70, 185].forEach(y0 => { ctx.beginPath(); for (let x=0;x<=512;x+=8){const y=y0+Math.sin(x*0.03)*8;x===0?ctx.moveTo(x,y):ctx.lineTo(x,y);} ctx.stroke(); });
+      ctx.strokeStyle = "#e03418"; ctx.lineWidth = 4; ctx.shadowColor = "#ff5030"; ctx.shadowBlur = 6;
+      for (let k = 0; k < 2; k++) { ctx.beginPath(); ctx.moveTo(64+k*256,0); ctx.lineTo(64+k*256+90,256); ctx.stroke(); }
+      ctx.shadowBlur = 0;
+      const tex = new THREE.CanvasTexture(c); tex.wrapS = THREE.RepeatWrapping; tex.wrapT = THREE.ClampToEdgeWrapping; return tex;
+    }
+    function buildRotor(hubR: number, tipR: number, len: number, turns: number, mat: THREE.Material) {
+      const g = new THREE.Group();
+      const bandMat = new THREE.MeshBasicMaterial({ map: makeContourTex(), side: THREE.DoubleSide, transparent: true, opacity: 0.96 });
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(tipR, tipR, len, 48, 1, true), bandMat);
+      band.rotation.x = Math.PI / 2; g.add(band);
+      g.add(new THREE.Mesh(buildBandBlade(hubR, tipR - 0.6, len - 2, turns, 40, 0), mat));
+      g.add(new THREE.Mesh(buildBandBlade(hubR, tipR - 0.6, len - 2, turns, 40, Math.PI), mat));
+      return g;
+    }
+    function buildHubGeo() {
+      const prof: [number,number][] = [[62,1.1],[56,2.6],[50,3.4],[40,4.0],[28,4.4],[16,4.8],[6,5.4],[0,7.2],[-6,11.2],[-12,13.6],[-18,13.4],[-26,11.4],[-34,8.4],[-42,5.4],[-50,3.2],[-58,1.6],[-62,1.0]];
+      return new THREE.LatheGeometry(prof.map(([y,r]) => new THREE.Vector2(r, y)), 32);
+    }
+    const TUBE_HALF = 100;
+
+    function buildChannel() {
+      const ch = new THREE.Group();
+      const hub2 = new THREE.Mesh(buildHubGeo(), impellerMat); hub2.rotation.x = -Math.PI/2; ch.add(hub2);
+
+      const statorIn = buildProp(2.5, 13, 7, 14, 4, impellerMat, 0); statorIn.position.z = -56; ch.add(statorIn);
+      const rotor = buildRotor(5, 22, 40, 0.5, impellerMat); rotor.position.z = -26; ch.add(rotor);
+      const statorOut = buildProp(2.5, 13, 7, 14, 4, impellerMat, Math.PI/4); statorOut.position.z = 56; ch.add(statorOut);
+
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 });
+      const rIn = new THREE.Mesh(new THREE.TorusGeometry(24,0.16,6,72), ringMat); rIn.position.z = -56; ch.add(rIn);
+      const rOut = new THREE.Mesh(new THREE.TorusGeometry(24,0.16,6,72), ringMat); rOut.position.z = 56; ch.add(rOut);
+
+      const shroudMat2 = new THREE.MeshBasicMaterial({ color: 0x8fe64f, wireframe: true, transparent: true, opacity: 0.14 });
+      const shroudObj = new THREE.Mesh(new THREE.CylinderGeometry(24,24,TUBE_HALF*2,22,4,true), shroudMat2);
+      shroudObj.rotation.x = Math.PI/2; ch.add(shroudObj);
+
+      const ductMat2 = new THREE.MeshStandardMaterial({ color: 0x33475c, metalness:0.35, roughness:0.6, transparent:true, opacity:0.24, side:THREE.DoubleSide });
+      const ductWallObj = new THREE.Mesh(new THREE.CylinderGeometry(33,33,TUBE_HALF*2,26,1,true), ductMat2);
+      ductWallObj.rotation.x = Math.PI/2; ch.add(ductWallObj);
+
+      const N = 220;
+      const flowGeo = new THREE.BufferGeometry();
+      const flowPos = new Float32Array(N*3), flowCol = new Float32Array(N*3), baseZ = new Float32Array(N);
+      for (let i=0;i<N;i++){
+        const r=Math.sqrt(Math.random())*25, a=Math.random()*Math.PI*2, z0=(Math.random()*2-1)*TUBE_HALF;
+        flowPos[i*3]=Math.cos(a)*r; flowPos[i*3+1]=Math.sin(a)*r; flowPos[i*3+2]=z0; baseZ[i]=z0;
+      }
+      flowGeo.setAttribute("position",new THREE.BufferAttribute(flowPos,3));
+      flowGeo.setAttribute("color",new THREE.BufferAttribute(flowCol,3));
+      const flowMat2 = new THREE.PointsMaterial({ size:3.2, vertexColors:true, transparent:true, opacity:0.9, depthWrite:false });
+      const flowObj = new THREE.Points(flowGeo, flowMat2); ch.add(flowObj);
+
+      const motorMat2 = new THREE.MeshStandardMaterial({ color:0x1b2531, metalness:0.4, roughness:0.5, emissive:new THREE.Color(0x4fa8ff), emissiveIntensity:0 });
+      const motorGroup = new THREE.Group();
+      const shaft2 = new THREE.Mesh(new THREE.CylinderGeometry(3,3,40,10), shaftMat); shaft2.rotation.x=Math.PI/2; shaft2.position.z=76; motorGroup.add(shaft2);
+      const seal2  = new THREE.Mesh(new THREE.CylinderGeometry(7,7,8,14), shaftMat); seal2.rotation.x=Math.PI/2; seal2.position.z=58; motorGroup.add(seal2);
+      const coup   = new THREE.Mesh(new THREE.CylinderGeometry(6,6,10,12), shaftMat); coup.rotation.x=Math.PI/2; coup.position.z=98; motorGroup.add(coup);
+      const mbody  = new THREE.Mesh(new THREE.CylinderGeometry(15,15,38,20), motorMat2); mbody.rotation.x=Math.PI/2; mbody.position.z=124; motorGroup.add(mbody);
+      ch.add(motorGroup);
+
+      return { channel:ch, statorIn, rotor, statorOut, shroudObj, ductWallObj, flowObj, baseZ, motorGroup, shroudMat:shroudMat2, ductMat:ductMat2, flowMat:flowMat2, motorMat:motorMat2 };
+    }
+
+    const left  = buildChannel();
+    const right = buildChannel();
+    left.channel.rotation.x  = Math.PI/2; left.channel.position.x  = -60;
+    right.channel.rotation.x = Math.PI/2; right.channel.position.x =  60;
+    scene.add(left.channel, right.channel);
+
+    const connMat = new THREE.MeshPhysicalMaterial({ color:0x9aa7b5, metalness:0.92, roughness:0.14, clearcoat:0.6, transparent:true, opacity:1 });
+    const motorConnGroup = new THREE.Group();
+    const connBar = new THREE.Mesh(new THREE.CylinderGeometry(5,5,120,16), connMat); connBar.rotation.z=Math.PI/2; connBar.position.set(0,-124,0); motorConnGroup.add(connBar);
+    const ccL = new THREE.Mesh(new THREE.CylinderGeometry(9,9,6,14), connMat); ccL.rotation.z=Math.PI/2; ccL.position.set(-60,-124,0); motorConnGroup.add(ccL);
+    const ccR = ccL.clone(); ccR.position.x=60; motorConnGroup.add(ccR);
+    scene.add(motorConnGroup);
+
+    const uCurve = new THREE.CatmullRomCurve3([new THREE.Vector3(-60,106,0),new THREE.Vector3(-60,150,0),new THREE.Vector3(-30,175,0),new THREE.Vector3(0,182,0),new THREE.Vector3(30,175,0),new THREE.Vector3(60,150,0),new THREE.Vector3(60,106,0)]);
+    const uPipeMat = new THREE.MeshStandardMaterial({ color:0x33475c, metalness:0.35, roughness:0.6, transparent:true, opacity:0.5, side:THREE.DoubleSide });
+    scene.add(new THREE.Mesh(new THREE.TubeGeometry(uCurve,40,14,16,false), uPipeMat));
+    const inletNub = new THREE.Mesh(new THREE.CylinderGeometry(15,15,10,20), uPipeMat); inletNub.position.set(-60,104,0); scene.add(inletNub);
+    const outletNub = inletNub.clone(); outletNub.position.x=60; scene.add(outletNub);
+
+    const housing = new THREE.Group();
+    const hShell = new THREE.Mesh(new THREE.CylinderGeometry(148,148,168,44,1,true), housingMat); hShell.rotation.x=Math.PI/2; housing.add(hShell);
+    const hCapF = new THREE.Mesh(new THREE.CircleGeometry(148,44), housingMat); hCapF.position.z=-84; housing.add(hCapF);
+    const hCapB = new THREE.Mesh(new THREE.CircleGeometry(148,44), housingMat); hCapB.position.z=84; hCapB.rotation.y=Math.PI; housing.add(hCapB);
+    const rimRing = new THREE.Mesh(new THREE.TorusGeometry(148,3.5,10,44), hubMat); rimRing.position.z=-84; housing.add(rimRing);
+    for (let i=0;i<16;i++){
+      const bolt = new THREE.Mesh(new THREE.CylinderGeometry(3.4,3.4,4,8), hubMat);
+      const a=(i/16)*Math.PI*2; bolt.position.set(Math.cos(a)*138,Math.sin(a)*138,-86); bolt.rotation.x=Math.PI/2; housing.add(bolt);
+    }
+    scene.add(housing);
+
+    // Labels
+    function makeLabel(html: string) {
+      const el = document.createElement("div");
+      el.style.cssText = "position:absolute;top:0;left:0;font-family:'JetBrains Mono',monospace;font-size:11px;color:#8B98A6;opacity:0;transition:opacity 0.35s;white-space:nowrap;display:flex;align-items:center;gap:8px;pointer-events:none;";
+      el.innerHTML = html; labelLayer.appendChild(el); return el;
+    }
+    const D = `<span style="width:5px;height:5px;border-radius:50%;background:#FF3B2F;flex-shrink:0;display:inline-block"></span>`;
+    const B = (t: string) => `<span style="color:#4FA8FF">${t}</span>`;
+    const statorInLbl  = makeLabel(`${D}${B("STATOR")} Inlet vanes — conditions flow`);
+    const rotorLbl     = makeLabel(`${D}${B("ROTOR")} Impeller — helical blade band`);
+    const statorOutLbl = makeLabel(`${D}${B("STATOR")} Outlet vanes — removes swirl`);
+    const motorLbl     = makeLabel(`${D}${B("MOTOR ×2")} Brushless drive, sealed shaft`);
+    const inletLbl     = makeLabel(`${D}${B("INLET")} Flow enters here`);
+    const outletLbl    = makeLabel(`${D}${B("OUTLET")} Flow exits here`);
+
+    // Scroll
+    let progress = 0;
+    function readProgress() {
+      const rect = wrap.getBoundingClientRect();
+      progress = Math.max(0, Math.min(1, -rect.top / (rect.height - window.innerHeight)));
+    }
+    window.addEventListener("scroll", readProgress, { passive: true });
+
+    // Camera keyframes
+    const camA=new THREE.Vector3(300,30,380), camB=new THREE.Vector3(25,-90,170), camC=new THREE.Vector3(0,-25,430);
+    const lookA=new THREE.Vector3(0,-25,0), lookB=new THREE.Vector3(-60,0,0), lookC=new THREE.Vector3(0,-25,0);
+    const upA=new THREE.Vector3(0,1,0), upB=new THREE.Vector3(Math.sin(0.95),Math.cos(0.95),0), upC=new THREE.Vector3(0,1,0);
+    camera.position.copy(camA);
+    const tPos=new THREE.Vector3().copy(camA), tLook=new THREE.Vector3().copy(lookA), cLook=new THREE.Vector3().copy(lookA);
+    const tUp=new THREE.Vector3().copy(upA), cUp=new THREE.Vector3().copy(upA);
+
+    function ease(t: number){return t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2;}
+    function hideCurve(t: number){if(t<0.3)return 1-ease(t/0.3);if(t<0.7)return 0;return ease((t-0.7)/0.3);}
+    function housingCurve(t: number){const h=hideCurve(t);return t>=0.7?h*0.16:h;}
+    function stateLabel(t: number){return t<0.32?"Overview":t<0.68?"Rotor–Stator":"Cross-Section";}
+
+    const clock = new THREE.Clock();
+    const tmp = new THREE.Vector3();
+    let rafId = 0;
+
+    function animate() {
+      rafId = requestAnimationFrame(animate);
+      const dt = Math.min(clock.getDelta(), 0.05);
+      const elapsed = clock.getElapsedTime();
+
+      const spin = dt * (reduceMotion ? 0.15 : 2.4);
+      left.rotor.rotation.z  += spin;
+      right.rotor.rotation.z += spin;
+
+      [left, right].forEach(ch => {
+        const pos = ch.flowObj.geometry.attributes.position as THREE.BufferAttribute;
+        const col = ch.flowObj.geometry.attributes.color as THREE.BufferAttribute;
+        const pa = pos.array as Float32Array, ca = col.array as Float32Array;
+        for (let i=0;i<ch.baseZ.length;i++){
+          const z=((ch.baseZ[i]+elapsed*0.09*TUBE_HALF*2+TUBE_HALF)%(TUBE_HALF*2))-TUBE_HALF;
+          pa[i*3+2]=z; const c=colorForZ(z); ca[i*3]=c.r; ca[i*3+1]=c.g; ca[i*3+2]=c.b;
+        }
+        pos.needsUpdate=true; col.needsUpdate=true;
+      });
+
+      const t = progress;
+      if (t < 0.5) { const lt=ease(t/0.5); tPos.lerpVectors(camA,camB,lt); tLook.lerpVectors(lookA,lookB,lt); tUp.lerpVectors(upA,upB,lt).normalize(); }
+      else { const lt=ease((t-0.5)/0.5); tPos.lerpVectors(camB,camC,lt); tLook.lerpVectors(lookB,lookC,lt); tUp.lerpVectors(upB,upC,lt).normalize(); }
+      camera.position.lerp(tPos, 0.08);
+      cLook.lerp(tLook, 0.08); cUp.lerp(tUp, 0.08).normalize();
+      camera.up.copy(cUp); camera.lookAt(cLook);
+
+      housingMat.opacity = Math.max(0.02, housingCurve(t));
+      const rOp = hideCurve(t);
+      right.shroudMat.opacity = 0.14*rOp;
+      right.ductMat.opacity   = 0.22*rOp;
+      right.flowMat.opacity   = 0.9*rOp;
+      right.channel.traverse(o => {
+        if ((o instanceof THREE.Mesh || o instanceof THREE.Points) && o!==right.shroudObj && o!==right.ductWallObj && o!==right.flowObj)
+          o.visible = rOp > 0.03;
+      });
+      uPipeMat.opacity = 0.5*rOp;
+      connMat.opacity  = rOp;
+      motorConnGroup.visible = rOp > 0.03;
+      left.ductMat.opacity = 0.24*rOp;
+      left.flowMat.opacity = 0.9*rOp;
+
+      const mOp = t<0.7?0:ease((t-0.7)/0.3);
+      left.motorMat.emissiveIntensity  = mOp*1.4;
+      right.motorMat.emissiveIntensity = mOp*1.4;
+      motorLight.intensity = mOp*1.2;
+
+      function proj(wp: THREE.Vector3){
+        tmp.copy(wp).project(camera);
+        return { x:(tmp.x*0.5+0.5)*canvas.clientWidth, y:(-tmp.y*0.5+0.5)*canvas.clientHeight };
+      }
+      const siW=new THREE.Vector3(); left.statorIn.getWorldPosition(siW);
+      const rW=new THREE.Vector3();  left.rotor.getWorldPosition(rW);
+      const soW=new THREE.Vector3(); left.statorOut.getWorldPosition(soW);
+      const mW=new THREE.Vector3();  left.motorGroup.getWorldPosition(mW);
+      const pSI=proj(siW),pR=proj(rW),pSO=proj(soW),pM=proj(mW);
+      const pIn=proj(inletNub.position), pOut=proj(outletNub.position);
+      statorInLbl.style.transform  = `translate(${pSI.x-170}px,${pSI.y-30}px)`;
+      rotorLbl.style.transform     = `translate(${pR.x+50}px,${pR.y}px)`;
+      statorOutLbl.style.transform = `translate(${pSO.x-170}px,${pSO.y+30}px)`;
+      motorLbl.style.transform     = `translate(${pM.x+50}px,${pM.y}px)`;
+      inletLbl.style.transform     = `translate(${pIn.x-190}px,${pIn.y-10}px)`;
+      outletLbl.style.transform    = `translate(${pOut.x+40}px,${pOut.y-10}px)`;
+      [statorInLbl,rotorLbl,statorOutLbl].forEach(l => l.style.opacity=(t>0.34&&t<0.66)?"1":"0");
+      [motorLbl,inletLbl,outletLbl].forEach(l => l.style.opacity=t>0.78?"1":"0");
+      pnDisplay.textContent = stateLabel(t);
+
+      renderer.render(scene, camera);
+    }
+
+    resize();
+    readProgress();
+    window.addEventListener("resize", resize);
+    animate();
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener("scroll", readProgress);
+      window.removeEventListener("resize", resize);
+      renderer.dispose();
+      while (labelLayer.firstChild) labelLayer.removeChild(labelLayer.firstChild);
+    };
+  }, []);
 
   return (
-    <div id="heart" ref={containerRef} style={{ height: "280vh", position: "relative" }}>
-      <div className="sticky top-0 h-screen flex items-center"
-        style={{ background: "#000814", overflow: "hidden" }}>
-
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="absolute left-1/4 top-1/2 -translate-y-1/2 w-[500px] h-[500px] opacity-[0.07]"
-            style={{ background: `radial-gradient(ellipse, ${RED}, transparent)`, filter: "blur(80px)" }} />
-          <div className="absolute right-1/4 top-1/2 -translate-y-1/2 w-[500px] h-[500px] opacity-[0.07]"
-            style={{ background: `radial-gradient(ellipse, ${BLUE}, transparent)`, filter: "blur(80px)" }} />
-        </div>
-
-        <div className="relative z-10 w-full max-w-7xl mx-auto px-6 py-6">
-          <div className="flex flex-col lg:flex-row items-center gap-6 lg:gap-10">
-            <div className="relative flex-shrink-0 w-full lg:w-[54%] rounded-2xl overflow-hidden"
-              style={{ aspectRatio: "16/10", background: "#080f1e", border: `1px solid ${BLUE}28` }}>
-
-              <motion.div className="absolute inset-0" style={{ opacity: s1Opacity }}>
-                <PumpRenderSVG stage={1} />
-                <div className="absolute bottom-3 left-3 flex gap-2 pointer-events-none">
-                  <span className="font-mono text-[10px] px-2.5 py-1 rounded-lg text-white"
-                    style={{ background: `${BLUE}cc`, backdropFilter: "blur(8px)" }}>Exterior View</span>
-                  <span className="font-mono text-[10px] px-2.5 py-1 rounded-lg text-white"
-                    style={{ background: "rgba(0,4,14,0.8)", border: "1px solid rgba(255,255,255,0.08)", backdropFilter: "blur(8px)" }}>Axial Flow Pump</span>
-                </div>
-              </motion.div>
-
-              <motion.div className="absolute inset-0" style={{ opacity: s2Opacity }}>
-                <motion.div className="w-full h-full" style={{ scale: zoomScale, transformOrigin: "center center" }}>
-                  <PumpRenderSVG stage={2} />
-                </motion.div>
-                <motion.div className="absolute top-5 right-5 pointer-events-none" style={{ opacity: bubbleOpacity }}>
-                  <div className="rounded-2xl p-3.5 max-w-[172px]"
-                    style={{ background: "rgba(4,6,20,0.94)", border: `1px solid ${RED}45`, backdropFilter: "blur(14px)" }}>
-                    <div className="text-[9px] font-mono uppercase tracking-widest mb-1.5" style={{ color: RED_L }}>Electrical Integration</div>
-                    <div className="text-white font-bold text-sm leading-tight mb-1.5">Brushless Motor Drive</div>
-                    <div className="text-[#6b7fa8] text-[10px] leading-relaxed">High-speed rotor at ~3,000 RPM. Wireless power via transcutaneous energy transfer system.</div>
-                    <div className="mt-2 flex items-center gap-1.5">
-                      <div className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: RED }} />
-                      <span className="text-[10px] font-mono" style={{ color: RED_L }}>~3,000 RPM</span>
-                    </div>
-                  </div>
-                  <svg className="absolute top-full left-1/2 -translate-x-1/2" viewBox="0 0 60 40" width="60" height="40" style={{ overflow: "visible" }}>
-                    <path d="M30,0 Q20,20 2,38" stroke={RED} strokeWidth="1.2" fill="none" strokeOpacity="0.65" strokeDasharray="3 2"/>
-                    <circle cx="2" cy="38" r="2.5" fill={RED} fillOpacity="0.75"/>
-                  </svg>
-                </motion.div>
-                <div className="absolute bottom-3 left-3 pointer-events-none">
-                  <span className="font-mono text-[10px] px-2.5 py-1 rounded-lg text-white"
-                    style={{ background: `${RED}bb`, backdropFilter: "blur(8px)" }}>ROTOR — Spinning</span>
-                </div>
-              </motion.div>
-
-              <motion.div className="absolute inset-0" style={{ opacity: s3Opacity }}>
-                <PumpRenderSVG stage={3} />
-                <div className="absolute bottom-3 left-3 pointer-events-none">
-                  <span className="font-mono text-[10px] px-2.5 py-1 rounded-lg text-white"
-                    style={{ background: `${BLU_L}cc`, backdropFilter: "blur(8px)" }}>CFD Velocity Field</span>
-                </div>
-              </motion.div>
-
-              <div className="absolute top-3 right-3 flex flex-col gap-1.5 z-20">
-                {[0,1,2].map(i => <div key={i} className="w-1.5 h-1.5 rounded-full" style={{ background: `${BLU_L}30` }} />)}
-              </div>
-            </div>
-
-            <div className="flex-1 flex flex-col gap-3 w-full lg:w-auto">
-              <div>
-                <SectionLabel text="Design" />
-                <WordReveal
-                  delay={0}
-                  className="font-['Bricolage_Grotesque',sans-serif] font-bold text-white mb-3"
-                  style={{ fontSize: "clamp(1.5rem, 3vw, 2.4rem)" }}
-                >
-                  Inside the Pulse TAH
-                </WordReveal>
-              </div>
-              <div className="p-4 rounded-2xl" style={{ background: "rgba(0,4,14,0.85)", border: `1px solid ${BLUE}25` }}>
-                <p className="text-[#6b7fa8] text-sm leading-relaxed">
-                  Our Total Artificial Heart uses an <span className="text-white font-medium">axial flow pump</span> design — a
-                  rotating impeller drives continuous blood flow while upstream and downstream stator vane sets straighten the flow.
-                </p>
-              </div>
-
-              <motion.div className="flex flex-col gap-3" style={{ opacity: cardsOpacity, y: cardsY }}>
-                {CFD_STAGES.map(({ label, body, col }, i) => (
-                  <div key={label} className="flex gap-3 p-4 rounded-2xl"
-                    style={{ background: "rgba(0,4,14,0.85)", border: `1px solid ${col}22` }}>
-                    <div className="flex-shrink-0 w-6 h-6 rounded-lg flex items-center justify-center text-xs font-bold"
-                      style={{ background: `${col}18`, color: col, border: `1px solid ${col}30`, fontFamily: "'Bricolage Grotesque',sans-serif" }}>
-                      {i + 1}
-                    </div>
-                    <div>
-                      <div className="font-['Bricolage_Grotesque',sans-serif] font-bold text-white text-sm mb-0.5">{label}</div>
-                      <p className="text-[#6b7fa8] text-xs leading-relaxed">{body}</p>
-                    </div>
-                  </div>
-                ))}
-              </motion.div>
-
-              <motion.div className="grid grid-cols-3 gap-2" style={{ opacity: cardsOpacity }}>
-                {[
-                  { v: "5 L/min", l: "Cardiac Output", c: BLUE },
-                  { v: "~3k RPM", l: "Rotor Speed",    c: RED  },
-                  { v: "42%+",    l: "Efficiency",     c: BLUE },
-                ].map(({ v, l, c }) => (
-                  <div key={l} className="text-center p-3 rounded-xl"
-                    style={{ background: `${c}10`, border: `1px solid ${c}20` }}>
-                    <div className="font-['Bricolage_Grotesque',sans-serif] font-bold text-white">{v}</div>
-                    <div className="text-[10px] font-mono text-[#6b7fa8] uppercase tracking-wider mt-0.5">{l}</div>
-                  </div>
-                ))}
-              </motion.div>
-            </div>
+    <div id="heart" ref={wrapRef} style={{ position: "relative", height: "600vh" }}>
+      <div className="sticky top-0 h-screen" style={{ overflow: "hidden", background: "#0A0E13" }}>
+        {/* Section header overlay */}
+        <div style={{ position: "absolute", top: 56, left: 40, zIndex: 5 }}>
+          <div style={{ fontFamily: "'JetBrains Mono',monospace", fontSize: 12, color: BLU_L, textTransform: "uppercase", letterSpacing: "0.12em", display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}>
+            <span style={{ width: 24, height: 1, background: BLU_L, display: "inline-block" }} />
+            Assembly
           </div>
-          <div className="flex items-center justify-center gap-3 mt-4 opacity-30">
-            <div className="h-px w-8" style={{ background: `linear-gradient(90deg,transparent,${BLU_L})` }} />
-            <span className="text-[10px] font-mono text-[#6b7fa8] uppercase tracking-[0.2em]">Scroll to explore all stages</span>
-            <div className="h-px w-8" style={{ background: `linear-gradient(90deg,${BLU_L},transparent)` }} />
-          </div>
+          <h2 style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontSize: "clamp(28px,4vw,44px)", fontWeight: 600, maxWidth: 480, color: "#EDF1F5", lineHeight: 1.1 }}>
+            One housing.<br />Two pump channels.
+          </h2>
+          <p style={{ color: "#8B98A6", fontSize: 14, maxWidth: 420, marginTop: 14, lineHeight: 1.6 }}>
+            Scroll to isolate a single rotor–stator stage, then pull back to a cross-section view showing both drive motors.
+          </p>
         </div>
+        {/* View label */}
+        <div style={{ position: "absolute", top: 56, right: 40, fontFamily: "'JetBrains Mono',monospace", fontSize: 12, color: "#5B6673", textAlign: "right", zIndex: 5 }}>
+          View
+          <span ref={pnDisplayRef} style={{ fontSize: 22, color: "#EDF1F5", fontFamily: "'Bricolage Grotesque',sans-serif", display: "block", marginTop: 4, maxWidth: 220, transition: "opacity 0.2s" }}>
+            Overview
+          </span>
+        </div>
+        {/* Three.js canvas */}
+        <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block" }} />
+        {/* Label overlay */}
+        <div ref={labelLayerRef} style={{ position: "absolute", inset: 0, pointerEvents: "none", zIndex: 4 }} />
       </div>
     </div>
   );
